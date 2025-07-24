@@ -53,33 +53,37 @@ document.addEventListener('DOMContentLoaded', function() {
             description: 'High-quality online TTS',
             icon: 'fas fa-wifi',
             quality: 'High Quality',
-            note: 'Requires internet connection'
+            note: 'Limited voice gender distinction'
         },
         'pyttsx3': {
             description: 'Offline system-based TTS',
             icon: 'fas fa-desktop',
             quality: 'Good Quality',
-            note: 'Works offline, English only'
+            note: 'Distinct male/female voices (English only)'
         }
     };
 
-    // Voice descriptions
+    // Voice descriptions with limitations
     const voiceDescriptions = {
         'female': {
-            description: 'Natural sounding female voice',
+            description: 'Female voice',
             icon: 'fas fa-female',
-            note: 'Feminine voice characteristics'
+            note: 'Voice availability varies by language'
         },
         'male': {
-            description: 'Natural sounding male voice',
+            description: 'Male voice',
             icon: 'fas fa-male',
-            note: 'Masculine voice characteristics'
+            note: 'Voice availability varies by language'
         }
     };
 
-    // Load available languages and engines on startup
+    // Voice capabilities (will be loaded from server)
+    let voiceCapabilities = {};
+
+    // Load available languages, engines, and voice capabilities on startup
     loadLanguages();
     loadEngines();
+    loadVoiceCapabilities();
 
     // Character counter
     textInput.addEventListener('input', function() {
@@ -100,22 +104,26 @@ document.addEventListener('DOMContentLoaded', function() {
         updateAccentOptions();
         updateLanguageInfo();
         updateSampleText();
+        updateVoiceWarning();
     });
 
     // Accent selection change
     accentSelect.addEventListener('change', function() {
         updateAccentInfo();
+        updateVoiceWarning();
     });
 
     // Voice gender selection change
     voiceGenderSelect.addEventListener('change', function() {
         updateVoiceInfo();
+        updateVoiceWarning();
     });
 
     // Engine selection change
     engineSelect.addEventListener('change', function() {
         updateEngineInfo();
         updateLanguageOptions();
+        updateVoiceWarning();
     });
 
     // Clear button functionality
@@ -168,6 +176,18 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
 
+    function loadVoiceCapabilities() {
+        fetch('/voice_capabilities')
+            .then(response => response.json())
+            .then(data => {
+                voiceCapabilities = data;
+                updateVoiceWarning();
+            })
+            .catch(error => {
+                console.warn('Could not load voice capabilities:', error);
+            });
+    }
+
     function loadLanguages() {
         fetch('/languages')
             .then(response => response.json())
@@ -198,10 +218,11 @@ document.addEventListener('DOMContentLoaded', function() {
                         option.value = engine.id;
                         
                         const icon = engine.id === 'gtts' ? '🌐' : '💻';
-                        const status = engine.accent_support ? 'Multi-accent' : 'Single accent';
+                        const status = engine.limitations ? 'Limited voices' : 'Multi-voice';
                         option.textContent = `${icon} ${engine.name} (${status})`;
                         option.dataset.languages = JSON.stringify(engine.languages || ['english']);
                         option.dataset.accentSupport = engine.accent_support;
+                        option.dataset.limitations = engine.limitations || '';
                         
                         engineSelect.appendChild(option);
                     });
@@ -241,6 +262,7 @@ document.addEventListener('DOMContentLoaded', function() {
         
         updateAccentOptions();
         updateLanguageInfo();
+        updateVoiceWarning();
     }
 
     function updateAccentOptions() {
@@ -275,6 +297,44 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         updateAccentInfo();
+        updateVoiceWarning();
+    }
+
+    function updateVoiceWarning() {
+        const selectedLanguage = languageSelect.value;
+        const selectedAccent = accentSelect.value;
+        const selectedEngine = engineSelect.value;
+        const selectedGender = voiceGenderSelect.value;
+        
+        // Check voice capabilities
+        const capabilities = voiceCapabilities[selectedLanguage]?.[selectedAccent];
+        
+        let warningText = '';
+        let warningColor = '#666';
+        
+        if (selectedLanguage === 'marathi' && selectedEngine === 'gtts') {
+            warningText = '⚠️ Same voice for both male and female';
+            warningColor = '#ffc107';
+        } else if (selectedEngine === 'gtts' && capabilities && !capabilities.gtts_distinct_voices) {
+            warningText = '⚠️ Limited voice variation available';
+            warningColor = '#ffc107';
+        } else if (selectedEngine === 'pyttsx3' && capabilities && capabilities.pyttsx3_distinct_voices) {
+            warningText = '✓ Distinct male/female voices available';
+            warningColor = '#28a745';
+        } else if (selectedEngine === 'pyttsx3' && selectedLanguage === 'marathi') {
+            warningText = '⚠️ English pronunciation for Marathi text';
+            warningColor = '#ffc107';
+        }
+        
+        if (warningText) {
+            voiceDescription.innerHTML = `
+                <i class="${voiceDescriptions[selectedGender].icon}"></i>
+                ${voiceDescriptions[selectedGender].description}
+                <br><small style="color: ${warningColor}">${warningText}</small>
+            `;
+        } else {
+            updateVoiceInfo();
+        }
     }
 
     function updateLanguageInfo() {
@@ -396,7 +456,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 
                 // Show output section
                 outputSection.style.display = 'block';
-                showSuccess(data.message || 'Speech generated successfully!');
+                
+                // Show success message with warning if applicable
+                let message = data.message || 'Speech generated successfully!';
+                if (data.warning) {
+                    message += ` ${data.warning}`;
+                }
+                showSuccess(message);
                 
                 // Scroll to output
                 outputSection.scrollIntoView({ behavior: 'smooth' });
@@ -455,7 +521,7 @@ document.addEventListener('DOMContentLoaded', function() {
         marathi: [
             "नमस्कार! आमच्या मराठी TTS अॅप मध्ये आपले स्वागत आहे। हे उच्च दर्जाची वाक् संश्लेषण तंत्रज्ञान वापरते.",
             "मराठी भाषेतील मजकूराचे ऑडिओमध्ये रूपांतर करा. आमचे तंत्रज्ञान नैसर्गिक आवाज निर्माण करते.",
-            "तंत्रज्ञान आपल्या जीवनाला सुलभ बनवते. आता मराठी भाषेतही उच्च दर्जाचे TTS अनुभवा.",
+            "तंत्रज्ञान आपल्या जीवनाला सुलभ बनवते। आता मराठी भाषेतही उच्च दर्जाचे TTS अनुभवा.",
             "भाषा ही संस्कृतीची वाहक आहे. आमच्या TTS तंत्रज्ञानाद्वारे मराठी भाषेचा आनंद लुटा."
         ]
     };

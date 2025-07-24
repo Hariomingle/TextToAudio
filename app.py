@@ -58,26 +58,26 @@ LANGUAGE_CONFIG = {
     }
 }
 
-# Voice gender configurations for different accents
+# Enhanced voice gender configurations with better TLD selection for voice variation
 VOICE_CONFIG = {
     'english': {
         'usa': {
-            'female': ['com', 'us'],
-            'male': ['com', 'us']
+            'female': ['com'],  # US female tends to be default
+            'male': ['us', 'com']  # Try different TLD for variation
         },
         'uk': {
-            'female': ['co.uk', 'com'],
-            'male': ['co.uk', 'ie']
+            'female': ['co.uk'],  # UK female
+            'male': ['co.uk', 'ie']  # Irish TLD might give different voice
         },
         'india': {
-            'female': ['co.in', 'com'],
-            'male': ['co.in', 'co.za']
+            'female': ['co.in'],  # Indian female
+            'male': ['co.in', 'com.au']  # Australian TLD for different voice
         }
     },
     'marathi': {
         'india': {
-            'female': ['co.in'],
-            'male': ['co.in']
+            'female': ['co.in'],  # Marathi uses same voice (gTTS limitation)
+            'male': ['co.in']  # Marathi uses same voice (gTTS limitation)
         }
     }
 }
@@ -174,17 +174,28 @@ def set_pyttsx3_voice(gender='female', language='english', accent='usa'):
         if preferred_voices:
             selected_voice = preferred_voices[0]
             engine.setProperty('voice', selected_voice['id'])
-            return selected_voice['name']
-    return None
+            return selected_voice['name'], selected_voice['gender']
+    return None, 'unknown'
+
+def has_distinct_voices(language, accent):
+    """Check if we have distinct male/female voices for a language/accent combination"""
+    if language == 'marathi':
+        return False  # gTTS doesn't provide distinct male/female voices for Marathi
+    
+    # Check if pyttsx3 has distinct voices
+    female_voices = [v for v in available_voices if v['gender'] == 'female']
+    male_voices = [v for v in available_voices if v['gender'] == 'male']
+    
+    return len(female_voices) > 0 and len(male_voices) > 0
 
 # Create necessary directories
 os.makedirs('uploads', exist_ok=True)
 os.makedirs('static/audio', exist_ok=True)
 
-print("Text-to-Speech Web App initialized with multi-language and accent support")
+print("Text-to-Speech Web App initialized with enhanced voice differentiation")
 print("Languages: English, Marathi")
 print("Accents: USA, UK, Indian")
-print("Voices: Male and Female for each accent")
+print("Note: Voice gender distinction varies by engine and language")
 
 @app.route('/')
 def index():
@@ -212,17 +223,21 @@ def generate_speech():
         unique_id = str(uuid.uuid4())[:8]
         output_path = os.path.join('static', 'audio', f'output_{unique_id}.wav')
         voice_used = None
+        actual_gender = voice_gender
+        
+        # Check if distinct voices are available for this combination
+        has_distinct = has_distinct_voices(language, accent)
         
         if tts_engine == 'gtts':
-            success, voice_used = generate_with_gtts(text, output_path, voice_gender, language, accent)
+            success, voice_used, actual_gender = generate_with_gtts(text, output_path, voice_gender, language, accent)
             if not success:
                 print("gTTS failed, falling back to pyttsx3")
-                success, voice_used = generate_with_pyttsx3(text, output_path, voice_gender, language, accent)
+                success, voice_used, actual_gender = generate_with_pyttsx3(text, output_path, voice_gender, language, accent)
         else:
-            success, voice_used = generate_with_pyttsx3(text, output_path, voice_gender, language, accent)
+            success, voice_used, actual_gender = generate_with_pyttsx3(text, output_path, voice_gender, language, accent)
             if not success:
                 print("pyttsx3 failed, falling back to gTTS")
-                success, voice_used = generate_with_gtts(text, output_path, voice_gender, language, accent)
+                success, voice_used, actual_gender = generate_with_gtts(text, output_path, voice_gender, language, accent)
         
         if not success:
             return jsonify({'error': 'Failed to generate speech with both engines'}), 500
@@ -246,6 +261,14 @@ def generate_speech():
         
         print("Speech generation completed successfully")
         
+        # Add warning if gender distinction isn't available
+        warning = None
+        if not has_distinct and tts_engine == 'gtts':
+            if language == 'marathi':
+                warning = "Note: Google TTS uses the same voice for both male and female in Marathi"
+            else:
+                warning = f"Note: Limited voice variation available for {language} ({accent}) accent"
+        
         return jsonify({
             'success': True,
             'audio_data': audio_base64,
@@ -253,8 +276,11 @@ def generate_speech():
             'engine_used': tts_engine,
             'voice_used': voice_used,
             'voice_gender': voice_gender,
+            'actual_gender': actual_gender,
             'language': language,
-            'accent': accent
+            'accent': accent,
+            'warning': warning,
+            'has_distinct_voices': has_distinct
         })
         
     except Exception as e:
@@ -272,10 +298,16 @@ def generate_with_gtts(text, output_path, voice_gender='female', language='engli
         voice_config = VOICE_CONFIG.get(language, {}).get(accent, {}).get(voice_gender, ['com'])
         selected_tld = voice_config[0] if voice_config else accent_config['tld']
         
-        # Create descriptive voice name
+        # Create descriptive voice name with limitation note for certain languages
         accent_name = accent_config['name']
         lang_name = lang_config['name']
-        voice_name = f"Google {lang_name} ({voice_gender.title()} - {accent_name})"
+        
+        if language == 'marathi':
+            voice_name = f"Google {lang_name} ({accent_name}) - Default Voice"
+            actual_gender = 'default'  # gTTS doesn't distinguish for Marathi
+        else:
+            voice_name = f"Google {lang_name} ({voice_gender.title()} - {accent_name})"
+            actual_gender = voice_gender
         
         # Create gTTS object
         tts = gTTS(
@@ -292,23 +324,24 @@ def generate_with_gtts(text, output_path, voice_gender='female', language='engli
         # Copy MP3 as WAV (browsers handle both formats)
         shutil.copy(temp_mp3, output_path)
         
-        return True, voice_name
+        return True, voice_name, actual_gender
         
     except Exception as e:
         print(f"gTTS error: {e}")
-        return False, None
+        return False, None, 'unknown'
 
 def generate_with_pyttsx3(text, output_path, voice_gender='female', language='english', accent='usa'):
     """Generate speech using pyttsx3 (offline)"""
     try:
         engine = get_pyttsx3_engine()
         if engine is None:
-            return False, None
+            return False, None, 'unknown'
         
         # Set voice based on preferences
-        voice_name = set_pyttsx3_voice(voice_gender, language, accent)
+        voice_name, actual_gender = set_pyttsx3_voice(voice_gender, language, accent)
         if not voice_name:
             voice_name = f"System TTS ({voice_gender.title()} {accent.upper()})"
+            actual_gender = voice_gender
         
         # Note: pyttsx3 primarily supports English, so for Marathi it will use English pronunciation
         if language == 'marathi':
@@ -323,14 +356,14 @@ def generate_with_pyttsx3(text, output_path, voice_gender='female', language='en
         
         # Check if file was created and has content
         if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            return True, voice_name
+            return True, voice_name, actual_gender
         else:
             print("pyttsx3 failed to create audio file")
-            return False, None
+            return False, None, 'unknown'
             
     except Exception as e:
         print(f"pyttsx3 error: {e}")
-        return False, None
+        return False, None, 'unknown'
 
 @app.route('/download_audio')
 def download_audio():
@@ -364,8 +397,30 @@ def health():
         'primary_engine': 'gtts' if gtts_available else 'pyttsx3',
         'available_voices': len(available_voices),
         'languages': list(LANGUAGE_CONFIG.keys()),
-        'total_voice_combinations': sum(len(lang['accents']) * 2 for lang in LANGUAGE_CONFIG.values())
+        'total_voice_combinations': sum(len(lang['accents']) * 2 for lang in LANGUAGE_CONFIG.values()),
+        'voice_limitations': {
+            'marathi_gtts': 'Same voice for male/female',
+            'indian_english_gtts': 'Limited voice variation'
+        }
     })
+
+@app.route('/voice_capabilities')
+def get_voice_capabilities():
+    """Get detailed information about voice capabilities for each language/accent combination"""
+    capabilities = {}
+    
+    for lang_key, lang_config in LANGUAGE_CONFIG.items():
+        capabilities[lang_key] = {}
+        for accent_key, accent_config in lang_config['accents'].items():
+            has_distinct = has_distinct_voices(lang_key, accent_key)
+            capabilities[lang_key][accent_key] = {
+                'gtts_distinct_voices': lang_key == 'english',  # Only English has some variation
+                'pyttsx3_distinct_voices': has_distinct,
+                'recommended_engine': 'pyttsx3' if has_distinct else 'gtts',
+                'limitation': 'Same voice for both genders' if lang_key == 'marathi' else None
+            }
+    
+    return jsonify(capabilities)
 
 @app.route('/languages')
 def get_languages():
@@ -385,12 +440,13 @@ def get_engines():
         engines.append({
             'id': 'gtts',
             'name': 'Google Text-to-Speech',
-            'description': 'High-quality online TTS (requires internet)',
+            'description': 'High-quality online TTS (limited voice gender distinction)',
             'quality': 'high',
             'speed': 'medium',
             'languages': list(LANGUAGE_CONFIG.keys()),
             'voice_options': ['female', 'male'],
-            'accent_support': True
+            'accent_support': True,
+            'limitations': 'Same voice for male/female in some languages'
         })
     except:
         pass
@@ -411,13 +467,14 @@ def get_engines():
         engines.append({
             'id': 'pyttsx3',
             'name': 'System TTS',
-            'description': 'Offline system-based TTS (English only)',
+            'description': 'Offline system-based TTS with distinct voices (English only)',
             'quality': 'medium',
             'speed': 'fast',
             'languages': ['english'],  # pyttsx3 mainly supports English
             'voice_options': voice_options,
             'accent_support': False,
-            'voices_detail': available_voices
+            'voices_detail': available_voices,
+            'limitations': 'English only, uses system voices'
         })
     
     return jsonify({'engines': engines})
@@ -438,21 +495,30 @@ def get_voices():
     for lang_key, lang_config in LANGUAGE_CONFIG.items():
         voices_info['gtts'][lang_key] = {}
         for accent_key, accent_config in lang_config['accents'].items():
-            voices_info['gtts'][lang_key][accent_key] = {
-                'female': f"Google {lang_config['name']} Female ({accent_config['name']})",
-                'male': f"Google {lang_config['name']} Male ({accent_config['name']})"
-            }
+            if lang_key == 'marathi':
+                voices_info['gtts'][lang_key][accent_key] = {
+                    'female': f"Google {lang_config['name']} ({accent_config['name']}) - Default Voice",
+                    'male': f"Google {lang_config['name']} ({accent_config['name']}) - Default Voice (Same as Female)"
+                }
+            else:
+                voices_info['gtts'][lang_key][accent_key] = {
+                    'female': f"Google {lang_config['name']} Female ({accent_config['name']})",
+                    'male': f"Google {lang_config['name']} Male ({accent_config['name']}) - Limited Variation"
+                }
     
     return jsonify(voices_info)
 
 if __name__ == '__main__':
-    print("Starting Multi-Language Text-to-Speech Web App...")
+    # Initialize pyttsx3 to get voice info
+    get_pyttsx3_engine()
+    
+    print("Starting Enhanced Multi-Language Text-to-Speech Web App...")
     print("Available engines:")
     print("- gTTS: Google Text-to-Speech (online, high quality)")
-    print("- pyttsx3: System TTS (offline, good quality)")
-    print("\nLanguage & Accent Support:")
-    print("- English: USA, UK, Indian accents")
-    print("- Marathi: Indian accent")
-    print("- Male & Female voices for all combinations")
+    print("- pyttsx3: System TTS (offline, distinct male/female voices)")
+    print("\nVoice Capabilities:")
+    print("- English: Better voice distinction with System TTS")
+    print("- Marathi: Limited to single voice per engine")
+    print("- Recommendation: Use System TTS for distinct male/female voices")
     print("\nNavigate to http://localhost:5000 to use the app")
     app.run(debug=True, host='0.0.0.0', port=5000) 
